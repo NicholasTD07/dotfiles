@@ -1,0 +1,404 @@
+---
+- hosts: all
+
+  vars:
+    # For all homebrew related tasks,
+    # remember to add the `become` and `become_user` properties.
+    # So that this playbook can be used on a multiple users system.
+
+    homebrew_user: "{{ ansible_user_id }}"
+    homebrew_group: admin
+
+    ssh_type: ed25519
+    ssh_rounds: 256
+    ssh_private_key_path: "~/.ssh/id_{{ ssh_type }}"
+    ssh_keygen_command: "ssh-keygen -o -t {{ ssh_type }} -a {{ ssh_rounds }} -N '{{ passphrase.user_input }}' -f {{ ssh_private_key_path }}"
+
+  tasks:
+    - name: Let me check your password first
+      command: echo "Password test in progress..."
+      timeout: 1
+      become: true
+      changed_when: false
+
+    - debug:
+        msg: Hello, World!
+
+    - name: Clone the dotfile repo into the home directory `~`
+      shell:
+        cmd: |
+          cd ~
+          git init
+          git remote add origin https://github.com/NicholasTD07/dotfiles.git
+          git fetch origin
+          git checkout -b main origin/main
+        creates: ~/.git
+      register: cloned_dotfile
+
+    # Using the `git` module will reset local branch to the main in remote
+    # which sometimes will drop local commits that haven't been pushed into remote yet...
+    # which is why we are just doing `git pull --rebase` here...
+    - name: Update the dotfile repo
+      command:
+        cmd: git pull --rebase
+        chdir: ~/
+      when: not cloned_dotfile.changed
+      register: updated_dotfile
+      changed_when: '"Already up to date" not in updated_dotfile.stdout'
+      # Note: `cloned_dotfile is skipped` does not work here.
+      # I assume that's because the `shell` module always runs.
+
+    # Set up SSH key pair #
+
+    - name: Check if SSH key pair exists
+      stat:
+        path: "{{ ssh_private_key_path }}"
+      register: ssh_private_key
+      tags: ssh
+
+    - name: Set up SSH key pair
+      block:
+
+        - name: Get the passphrase for the SSH key pair
+          pause:
+            prompt: "Enter the passphrase"
+            echo: no
+          register: passphrase
+
+        - name: Generate the SSH key pair
+          command: "{{ ssh_keygen_command }}"
+
+      when: not ssh_private_key.stat.exists
+      no_log: true
+      tags: ssh
+
+    # End of Set up SSH key pair #
+
+    - name: Set up Homebrew (and upgrade all packages)
+      include_role:
+        name: geerlingguy.mac.homebrew
+      vars:
+        homebrew_upgrade_all_packages: false # add a var to override
+        # homebrew_installed_packages:
+        # homebrew_uninstalled_packages:
+        # homebrew_cask_apps:
+        # homebrew_cask_uninstalled_apps:
+
+    # Because Spacemacs takes so long to finish its initial bootstrap,
+    # let's do it as early as we can.
+    - name: Tap the Emacs Plus repository
+      homebrew_tap:
+        name: d12frosted/emacs-plus
+      become: "{{ (homebrew_user != ansible_user_id) | bool }}"
+      become_user: "{{ homebrew_user }}"
+
+    # Not sure whether libvterm is needed here...
+    - name: Install Emacs Plus
+      homebrew:
+        name: "{{ item }}"
+      loop:
+        - emacs-plus
+        - libvterm # Is this needed though?
+      become: "{{ (homebrew_user != ansible_user_id) | bool }}"
+      become_user: "{{ homebrew_user }}"
+
+    - name: Get Homebrew's prefix
+      command: brew --prefix
+      register: brew_prefix
+      changed_when: false
+
+    - name: Symlink the Emacs.app to /Applications
+      file:
+        src: "{{ brew_prefix.stdout }}/opt/emacs-plus/Emacs.app"
+        dest: /Applications/Emacs.app
+        state: link
+
+    - name: Check if Spacemacs has been initialized
+      stat:
+        path: ~/.emacs.d/
+      register: spacemacs_stat
+
+    - name: Keep Spacemacs up-to-date
+      git:
+        repo: https://github.com/syl20bnr/spacemacs.git
+        dest: ~/.emacs.d/
+        version: develop
+
+    - name: Bootstrap Spacemacs if it hasn't been initialized yet
+      command: emacs &
+      async: 600 # Give Emacs 10 minutes to run
+      poll: 0 # in the background
+      when: not spacemacs_stat.stat.exists
+
+    # Set up Vim #
+    # Caveats: Vim's plugins aren't installed after this...
+
+    - name: Install Vim
+      homebrew:
+        name: "{{ item }}"
+      loop:
+        - vim
+        - cmake # needed by YouCompleteMe
+      become: "{{ (homebrew_user != ansible_user_id) | bool }}"
+      become_user: "{{ homebrew_user }}"
+
+    - name: Check if Vim plugins are installed
+      stat:
+        path: ~/.vim-plugins/
+      register: vim_plugins_stat
+
+    - name: Bootstrap Vim plugins if plugins are not installed yet
+      command: vim
+      async: 90 # Give Vim one minute and half to run
+      poll: 0 # in the background
+      when: not vim_plugins_stat.stat.exists
+
+    # Caveat: Due to the nature of how Vim and its plugins are installed,
+    # YouCompleteMe won't be installed on the first run of the playbook...
+
+    - name: Check if YouCompleteMe has been compiled
+      stat:
+        path: ~/.vim-plugins/plugins/YouCompleteMe/.compiled
+      register: YCM_compiled
+
+    - name: Compile YouCompleteMe
+      block:
+
+      - name: Compile YouCompleteMe
+        command:
+          cmd: python3 install.py
+          chdir: ~/.vim-plugins/plugins/YouCompleteMe
+
+      - name: Mark YCM as compiled
+        file:
+          path: ~/.vim-plugins/plugins/YouCompleteMe/.compiled
+          state: touch
+
+      when: vim_plugins_stat.stat.exists and not YCM_compiled.stat.exists
+
+    # Install Homebrew packages and casks #
+
+    - name: Install Homebrew packages
+      homebrew:
+        name: "{{ item }}"
+        state: present
+      become: "{{ (homebrew_user != ansible_user_id) | bool }}"
+      become_user: "{{ homebrew_user }}"
+      loop:
+        # commandline utilities
+
+        - fish
+        - tree
+
+        # git
+
+        - git
+        - git-lfs
+        - ydiff # needed by git for diffing
+
+        # editors support
+
+        - fzf # needed by fish and also vim for searching
+
+        - ripgrep # needed by emacs for searching
+        - ispell # needed by emacs for spell checks
+
+        # languages
+
+        - python
+        - ipython
+        - rbenv
+        - node
+        - yarn
+
+        # Swift
+
+        - carthage # Until SPM solves its binary caches on CI, carthage is our friend...
+        - swiftgen
+        - swiftformat
+
+        # dev support
+
+        - go-task/tap/go-task
+
+
+    - name: Check whether Xcode exists
+      command:
+        cmd: xcodebuild -version
+      ignore_errors: true
+      register: xcodebuild
+
+    - name: Install Homebrew packages requiring Xcode
+      homebrew:
+        name: "{{ item }}"
+        state: present
+      become: "{{ (homebrew_user != ansible_user_id) | bool }}"
+      become_user: "{{ homebrew_user }}"
+      loop:
+        - swiftlint
+      when: xcodebuild is succeeded
+
+    - name: Install Homebrew Casks
+      homebrew_cask:
+        name: "{{ item }}"
+        state: present
+      become: "{{ (homebrew_user != ansible_user_id) | bool }}"
+      become_user: "{{ homebrew_user }}"
+      loop:
+
+        # macOS must-haves
+
+        - 1password
+        - dropbox
+        - google-drive
+        - cryptomator
+        - firefox
+        - amethyst
+        - sublime-text
+        - obsidian
+        # - little-snitch
+
+        # work / life?
+
+        - zoom
+        - slack # needed for the huddles
+        - docker
+        - protonvpn
+
+        # macOS quality of life improvements
+
+        - alfred
+        - bartender
+        - caffeine
+        - istat-menus
+        - iterm2
+        - moom
+        - lunar
+
+        # gaming
+
+        - steam
+
+        # streaming / recording
+
+        - obs
+        - audio-hijack
+        - loopback
+
+        - vlc
+        - elgato-stream-deck
+        - elgato-wave-link
+
+        # lightroom
+
+        - adobe-creative-cloud
+
+        # drivers
+
+        # MIA
+
+        # mas 'DaisyDisk', id: 411643860
+        # mas 'GIPHY CAPTURE', id: 668208984
+        # mas 'Disk Care', id: 913724705
+
+    - name: Install shared fonts
+      include_role:
+        name: shared_fonts
+      vars:
+        fonts:
+          - font-inconsolata-g-for-powerline
+          - font-source-code-pro
+          - font-source-code-pro-for-powerline
+
+    # Set up Python development environment #
+
+    - name: Ensure Ansible is installed with Homebrew's pip
+      pip:
+        name: ansible
+      vars:
+        extra_path: "{{ brew_prefix.stdout }}/bin"
+
+    # It's much easier to install poetry with Homebrew
+    # Than using the installer...
+    # For some reason it really like the `~/Library/Python/3.9/bin` path...
+    - name: Install poetry
+      homebrew:
+        name: poetry
+      become: true
+      become_user: "{{ homebrew_user }}"
+
+    - name: Set Up The Root Virtual Environment
+      command:
+        cmd: poetry install --no-root
+        chdir: ~/
+        creates: ~/poetry.lock
+
+    # Set up fishshell as the default shell #
+
+    - name: Get fishshell's path
+      command: which fish
+      register: fish
+      changed_when: false
+
+    - name: Ensure fishshell is included in /etc/shells
+      lineinfile:
+        path: /etc/shells
+        line: "{{ fish.stdout }}"
+      become: true
+
+    - name: Ensure current user's default shell is fish
+      user:
+        name: "{{ ansible_user_id }}"
+        shell: "{{ fish.stdout }}"
+      become: true
+
+    # Configure fzf #
+
+    - name: Configure fzf
+      command:
+        cmd: "{{ brew_prefix.stdout }}/opt/fzf/install"
+        creates: ~/.fzf.bash
+
+    # Folder structure #
+
+    - name: Set up my folder structures
+      file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - ~/proj
+        - ~/work
+        - ~/fork
+
+    # Configure my Dock #
+
+    - name: Duck!
+      osx_defaults:
+        domain: com.apple.dock
+        key: autohide
+        type: bool
+        value: true
+        state: present
+      register: dock_duck
+
+    - name: Don't you dare to bounce (Dock icons, I am talking to you)
+      osx_defaults:
+        domain: com.apple.dock
+        key: no-bouncing
+        type: bool
+        value: true
+        state: present
+      register: dock_no_bounce
+
+    - name: Only show me running apps in the Dock
+      osx_defaults:
+        domain: com.apple.dock
+        key: static-only
+        type: bool
+        value: true
+        state: present
+      register: dock_only_running_apps
+
+    - name: Kill it! Kill it now! (Dock)
+      command: killall Dock
+      when: dock_no_bounce is changed or dock_only_running_apps is changed or dock_duck is changed

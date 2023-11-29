@@ -1,0 +1,8 @@
+---
+homebrew_user: "{{ ansible_user_id }}"
+homebrew_group: "{{ ansible_user_gid }}"
+
+fonts: []
+state: present
+user_fonts_directory: ~/Library/Fonts
+homebrew_fonts_directory: /Users/Shared/Fonts
