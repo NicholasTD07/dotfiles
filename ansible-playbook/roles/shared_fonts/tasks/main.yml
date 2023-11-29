@@ -1,0 +1,47 @@
+---
+- block:
+  - name: Install svn for fonts
+    homebrew:
+      name: svn
+      state: "{{ state }}"
+
+  - name: Tap the fonts repository
+    homebrew_tap:
+      name: homebrew/cask-fonts
+
+  - name: Install Homebrew Font Casks (that can be shared with other users)
+    homebrew_cask:
+      name: "{{ item }}"
+      state: present
+      install_options:
+        - "fontdir={{ homebrew_fonts_directory }}"
+    loop: "{{ fonts }}"
+    when: state == 'present'
+
+  # Can't figure out how to combine this and the above together yet...
+  # It seems jinja cannot do such things:
+  #   `{{ fontdir={{ var }} if state == 'present' }}`
+  - name: Uninstall Homebrew Font Casks when state is absent
+    homebrew_cask:
+      name: "{{ item }}"
+      state: absent
+    loop: "{{ fonts }}"
+    when: state == 'absent'
+
+  # We cannot untap a tap before all packages/casks from it are uninstalled
+  - name: Untap the fonts repository when state is absent
+    homebrew_tap:
+      name: homebrew/cask-fonts
+      state: absent
+    when: state == 'absent'
+
+  - name: Install the fonts
+    copy:
+      src: "{{ item  }}"
+      dest: "{{ user_fonts_directory }}"
+    with_fileglob: "{{ homebrew_fonts_directory }}/*"
+    when: state == 'present'
+    become: false # override block level become
+
+  become: "{{ (homebrew_user != ansible_user_id) | bool }}"
+  become_user: "{{ homebrew_user }}"

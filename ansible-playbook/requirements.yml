@@ -1,0 +1,5 @@
+---
+collections:
+  # It would still be great if we can update the official document regarding the following:
+  # "How to Install a collection from a git repo in the requirements.yml file"
+  -  name: geerlingguy.mac
