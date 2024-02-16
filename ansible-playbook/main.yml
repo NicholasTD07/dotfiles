@@ -109,7 +109,7 @@
 
     - name: Symlink the Emacs.app to /Applications
       file:
-        src: "{{ brew_prefix.stdout }}/opt/emacs-plus/Emacs.app"
+        src: "{{ brew_prefix.stdout }}/opt/emacs-plus@29/Emacs.app"
         dest: /Applications/Emacs.app
         state: link
 
@@ -263,6 +263,8 @@
         - zoom
         - slack # needed for the huddles
         - docker
+        - jq
+
         - protonvpn
 
         # macOS quality of life improvements
@@ -291,7 +293,7 @@
 
         # lightroom
 
-        - adobe-creative-cloud
+        # - adobe-creative-cloud
 
         # drivers
 
