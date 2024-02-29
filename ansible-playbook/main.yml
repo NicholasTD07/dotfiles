@@ -189,6 +189,7 @@
 
         - fish
         - tree
+        - zoxide # cd is lame, comparatively. zoxide is awesome.
 
         # git
 
