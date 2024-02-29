@@ -255,3 +255,5 @@ end
 function git_repo_exists
     command git rev-parse --is-inside-work-tree  > /dev/null 2> /dev/null
 end
+
+thefuck --alias | source
